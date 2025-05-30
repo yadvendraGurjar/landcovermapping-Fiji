@@ -1,22 +1,25 @@
+var Nadi = ee.Geometry.Rectangle([177.35, -17.87, 177.575, -17.645]);
+
+Map.centerObject(Nadi, 10);
 
 function maskL8sr(image) {
   // Bits 3 and 5 are cloud shadow and cloud, respectively.
   var cloudShadowBitMask = 1 << 3;
   var cloudsBitMask = 1 << 5;
   // Get the pixel QA band.
-  var qa = image.select('pixel_qa');
+  var qa = image.select('QA_PIXEL');
   // Both flags should be set to zero, indicating clear conditions.
   var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
       .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
   // Return the masked image, scaled to reflectance, without the QA bands.
   return image.updateMask(mask).divide(10000)
-      .select("B[0-9]*")
+      .select("SR_B[0-9]*")
       .copyProperties(image, ["system:time_start"]);
-};
+}
 
-// Working on 2019
-var collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
-    .filterDate('2019-09-01','2020-09-01')
+// Working on 2013
+var collection = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+    .filterDate('2013-09-01','2014-09-01')
     .map(maskL8sr)
     .filterBounds(Nadi)
     .median()
@@ -24,13 +27,13 @@ var collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
 
 
 
-//var NDBI= collection.normalizedDifference(['B6','B5']).rename('NDBI');
+var NDBI= collection.normalizedDifference(['B6','B5']).rename('NDBI');
 
 
-var green=collection.select('B3');
-var red = collection.select('B4');
-var nir = collection.select('B5');
-var swir= collection.select('B6');
+var green=collection.select('SR_B3');
+var red = collection.select('SR_B4');
+var nir = collection.select('SR_B5');
+var swir= collection.select('SR_B6');
 
 var ndvi = nir.subtract(red).divide(nir.add(red));
 
@@ -40,26 +43,42 @@ var ndbi = swir.subtract(nir).divide(swir.add(nir));
 
 
 //EPSG:4326
-var new2019 = collection
-.select(['B1','B2','B3','B4','B5','B6','B7'])
+var new2013 = collection
+.select(['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B6','SR_B7'])
 .addBands(ndvi)
 .addBands(ndwi)
 .addBands(ndbi);
 
 
-Map.addLayer(new2019, {bands: ['B4', 'B3', 'B2'], min: 0, max: 0.3}, '2019');
+Map.addLayer(new2013, {bands: ['SR_B4', 'SR_B3', 'SR_B2'], min: 0, max: 3000}, '2013')
 
+var training = Urban.merge(Grass).merge(Forest).merge(BareSoil).merge(WaterBodies).merge(CoastalAreas).merge(Wetland);
 
-
-print(new2019)
-
-
-Export.image.toAsset({
-  image:new2019,
- description: '2019_original',
- scale:30,
-  region:Nadi,
-  maxPixels: 1e13,
+var training = new2013.sampleRegions({
+  collection:training,
+  properties:['Class'],
+  scale: 10
 });
 
+print(training)
 
+var classifier = ee.Classifier.smileRandomForest(50).train({
+  features: training,
+  classProperty:'Class',
+  inputProperties: new2013.bandNames()
+});
+
+var Classified2013 = new2013.classify(classifier);
+
+var palette = [
+  'FF0000', // Urban
+  'B9F6CA', // Grass
+  '1B5E20', // Forest
+  'FFFF00', // Bare Soil
+  '0000FF', // Water
+  'FFF9C4', // Coast
+  '757575'  // Wetland
+];
+
+// 12. Add to map
+Map.addLayer(Classified2013, {min: 0, max: 6, palette: palette}, 'Classified 2013');
